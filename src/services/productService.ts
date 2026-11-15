@@ -1,8 +1,7 @@
 import {
   collection, doc, addDoc, updateDoc, deleteDoc,
-  query, orderBy, onSnapshot, serverTimestamp
+  query, where, orderBy, onSnapshot, getDocs, serverTimestamp
 } from "firebase/firestore";
-import { db } from "../lib/firebase";
 
 const PRODUCTS = "products";
 const STOCK_MOVEMENTS = "stockMovements";
@@ -39,15 +38,14 @@ export async function adjustStock(
   reason: string,
   currentQuantity: number,
   productName: string,
-  userId: string
+  userId: string,
+  minStockThreshold: number
 ) {
   const newQuantity = currentQuantity + change;
-
   await updateDoc(doc(db, PRODUCTS, productId), {
     quantity: newQuantity,
     updatedAt: serverTimestamp(),
   });
-
   await addDoc(collection(db, STOCK_MOVEMENTS), {
     productId,
     productName,
@@ -58,4 +56,21 @@ export async function adjustStock(
     changedBy: userId,
     timestamp: serverTimestamp(),
   });
+
+  // Low stock alert
+  if (newQuantity <= minStockThreshold) {
+    const usersSnap = await getDocs(
+      query(collection(db, "users"), where("role", "in", ["admin", "warehouse_manager"]))
+    );
+    for (const userDoc of usersSnap.docs) {
+      await addDoc(collection(db, "notifications"), {
+        userId: userDoc.id,
+        type: "low_stock",
+        message: `Low stock: ${productName} has ${newQuantity} units (threshold: ${minStockThreshold})`,
+        read: false,
+        relatedProductId: productId,
+        createdAt: serverTimestamp(),
+      });
+    }
+  }
 }
