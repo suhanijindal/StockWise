@@ -3,10 +3,10 @@ import {
   signInWithEmailAndPassword,
   signOut,
   onAuthStateChanged,
-  User
 } from "firebase/auth";
 import { doc, setDoc, getDoc, serverTimestamp } from "firebase/firestore";
 import { auth, db } from "../lib/firebase";
+import type { User } from "firebase/auth";
 
 export async function signup(email: string, password: string, name: string, role: string) {
   const cred = await createUserWithEmailAndPassword(auth, email, password);
