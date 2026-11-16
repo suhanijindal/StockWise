@@ -1,5 +1,7 @@
+
 import { Timestamp } from "firebase/firestore";
 
+// USER
 export interface User {
   id: string;
   name: string;
@@ -8,6 +10,7 @@ export interface User {
   createdAt: Timestamp;
 }
 
+// PRODUCT
 export interface Product {
   id: string;
   name: string;
@@ -23,6 +26,7 @@ export interface Product {
   updatedAt: Timestamp;
 }
 
+// SUPPLIER
 export interface Supplier {
   id: string;
   name: string;
@@ -34,35 +38,74 @@ export interface Supplier {
   createdAt: Timestamp;
 }
 
+// LEGACY ORDER
+// Kept for compatibility with existing mock data and dashboard.
+
 export interface Order {
-  id: string;
-  supplierId: string;
-  createdBy: string;
-  status: "pending" | "approved" | "processing" | "shipped" | "delivered" | "rejected";
-  items: OrderItem[];
-  totalAmount: number;
-  createdAt: Timestamp;
-  updatedAt: Timestamp;
+  id?: string;
+  [key: string]: any;
 }
 
+// PURCHASE ORDER STATUS
+export type OrderStatus =
+  | "Pending"
+  | "Approved"
+  | "Processing"
+  | "Shipped"
+  | "Delivered"
+  | "Rejected";
+
+// PURCHASE ORDER ITEM
 export interface OrderItem {
   productId: string;
   productName: string;
-  quantity: number;
+  sku?: string;
+  orderedQuantity: number;
+  receivedQuantity?: number;
   unitPrice: number;
 }
 
+// PURCHASE ORDER
+export interface PurchaseOrder {
+  id?: string;
+  orderNumber: string;
+  supplierId: string;
+  supplierName: string;
+  createdBy: string;
+  status: OrderStatus;
+  items: OrderItem[];
+  totalAmount: number;
+  notes?: string;
+  rejectionReason?: string;
+  receiptConfirmed: boolean;
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+  confirmedAt?: Timestamp;
+  confirmedBy?: string;
+}
+
+// NOTIFICATION
 export interface Notification {
   id: string;
-  userId: string;
-  type: "low_stock" | "new_order" | "order_update";
+  userId?: string;
+  recipientId?: string;
+  recipientRole?: "supplier" | "warehouse_manager" | "admin";
+  title?: string;
+  type:
+    | "low_stock"
+    | "new_order"
+    | "order_update"
+    | "order_created"
+    | "order_status";
   message: string;
   read: boolean;
+  relatedId?: string;
   relatedOrderId?: string;
   relatedProductId?: string;
   createdAt: Timestamp;
 }
 
+// STOCK MOVEMENT
 export interface StockMovement {
   id: string;
   productId: string;

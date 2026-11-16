@@ -1,22 +1,145 @@
-import {
-  collection, doc, query, where, orderBy,
-  onSnapshot, updateDoc
-} from "firebase/firestore";
-import { db } from "../lib/firebase";
 
-export function subscribeToNotifications(userId: string, callback: (notifs: any[]) => void) {
-  const q = query(
-    collection(db, "notifications"),
-    where("userId", "==", userId),
-    orderBy("createdAt", "desc")
-  );
-  return onSnapshot(q, (snapshot) => {
-    callback(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+import {
+  collection,
+  doc,
+  query,
+  where,
+  orderBy,
+  onSnapshot,
+  updateDoc,
+  addDoc,
+  serverTimestamp,
+} from "firebase/firestore";
+
+import { db } from "../lib/firebase";
+import type { Notification } from "../types";
+
+type NotificationRole =
+  | "supplier"
+  | "warehouse_manager"
+  | "admin";
+
+interface CreateNotificationData {
+  /** Firebase Authentication UID, NOT supplier document ID. */
+  recipientId?: string;
+  recipientRole?: NotificationRole;
+  title: string;
+  message: string;
+  type: Notification["type"];
+  relatedId?: string;
+}
+
+export async function createNotification(
+  data: CreateNotificationData,
+) {
+  return addDoc(collection(db, "notifications"), {
+    userId: data.recipientId ?? null,
+    recipientRole: data.recipientRole ?? null,
+    title: data.title,
+    message: data.message,
+    type: data.type,
+    relatedId: data.relatedId ?? null,
+    read: false,
+    createdAt: serverTimestamp(),
   });
 }
 
-export async function markAsRead(notificationId: string) {
-  return updateDoc(doc(db, "notifications", notificationId), {
-    read: true,
-  });
+export function subscribeToNotifications(
+  userId: string,
+  callback: (notifs: Notification[]) => void,
+  role?: NotificationRole,
+  onError?: (error: Error) => void,
+) {
+  let userNotifications: Notification[] = [];
+  let roleNotifications: Notification[] = [];
+
+  let active = true;
+
+  const notify = () => {
+    if (!active) return;
+
+    const merged = new Map<string, Notification>();
+
+    [...userNotifications, ...roleNotifications].forEach(
+      (item) => {
+        merged.set(item.id, item);
+      },
+    );
+
+    const sorted = Array.from(merged.values()).sort(
+      (a, b) => {
+        const timeA = a.createdAt?.toMillis?.() ?? 0;
+        const timeB = b.createdAt?.toMillis?.() ?? 0;
+        return timeB - timeA;
+      },
+    );
+
+    callback(sorted);
+  };
+
+  const handleError = (error: Error) => {
+    if (active) {
+      console.error("Notification subscription failed:", error);
+      onError?.(error);
+    }
+  };
+
+  const userQuery = query(
+    collection(db, "notifications"),
+    where("userId", "==", userId),
+    orderBy("createdAt", "desc"),
+  );
+
+  const unsubscribeUser = onSnapshot(
+    userQuery,
+    (snapshot) => {
+      userNotifications = snapshot.docs.map((d) => ({
+        id: d.id,
+        ...d.data(),
+      })) as Notification[];
+
+      notify();
+    },
+    handleError,
+  );
+
+  let unsubscribeRole = () => {};
+
+  if (role) {
+    const roleQuery = query(
+      collection(db, "notifications"),
+      where("recipientRole", "==", role),
+      orderBy("createdAt", "desc"),
+    );
+
+    unsubscribeRole = onSnapshot(
+      roleQuery,
+      (snapshot) => {
+        roleNotifications = snapshot.docs.map((d) => ({
+          id: d.id,
+          ...d.data(),
+        })) as Notification[];
+
+        notify();
+      },
+      handleError,
+    );
+  }
+
+  return () => {
+    active = false;
+    unsubscribeUser();
+    unsubscribeRole();
+  };
+}
+
+export async function markAsRead(
+  notificationId: string,
+): Promise<void> {
+  await updateDoc(
+    doc(db, "notifications", notificationId),
+    {
+      read: true,
+    },
+  );
 }
