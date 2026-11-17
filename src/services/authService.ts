@@ -66,7 +66,11 @@ export async function signup(
   // one for this email address. Best-effort: signup still succeeds when
   // there is no match and the account is linked manually later.
   if (role === "supplier") {
-    await autoLinkSupplierByEmail(cred.user.uid, cleanEmail);
+    await autoLinkSupplierByEmail(
+      cred.user.uid,
+      cleanEmail,
+      name.trim()
+    );
   }
 
   return cred.user;
@@ -90,7 +94,8 @@ export async function signup(
  */
 export async function autoLinkSupplierByEmail(
   uid: string,
-  email: string
+  email: string,
+  displayName = ""
 ): Promise<string | null> {
   const cleanEmail = email.trim().toLowerCase();
 
@@ -112,13 +117,43 @@ export async function autoLinkSupplierByEmail(
       );
     });
 
-    if (claimable.length !== 1) {
-      if (claimable.length > 1) {
-        console.warn(
-          `${claimable.length} supplier records use ${cleanEmail}; link this account manually.`
-        );
-      }
+    if (claimable.length > 1) {
+      console.warn(
+        `${claimable.length} supplier records use ${cleanEmail}; link this account manually.`
+      );
       return null;
+    }
+
+    // Nothing to claim: register this account as its own supplier so it
+    // can start receiving purchase orders straight away. The company,
+    // phone and address are left blank for the supplier to complete.
+    if (claimable.length === 0) {
+      const newSupplierRef = doc(collection(db, "suppliers"));
+
+      const fallbackName =
+        displayName.trim() || cleanEmail.split("@")[0] || "New supplier";
+
+      const batch = writeBatch(db);
+
+      batch.set(newSupplierRef, {
+        name: fallbackName,
+        company: fallbackName,
+        email: cleanEmail,
+        phone: "",
+        address: "",
+        userId: uid,
+        createdAt: serverTimestamp(),
+      });
+
+      batch.set(
+        doc(db, "users", uid),
+        { supplierId: newSupplierRef.id },
+        { merge: true }
+      );
+
+      await batch.commit();
+
+      return newSupplierRef.id;
     }
 
     const supplierDoc = claimable[0];

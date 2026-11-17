@@ -192,7 +192,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           ) {
             linkAttempted = true;
 
-            void autoLinkSupplierByEmail(current.uid, current.email);
+            void autoLinkSupplierByEmail(
+              current.uid,
+              current.email,
+              typeof profile.name === "string" ? profile.name : "",
+            );
           }
         },
         (cause) => {
