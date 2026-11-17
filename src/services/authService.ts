@@ -17,12 +17,30 @@ import { auth, db } from "../lib/firebase";
 import type { User as FirebaseUser } from "firebase/auth";
 
 
+const VALID_ROLES = [
+  "admin",
+  "warehouse_manager",
+  "supplier",
+] as const;
+
+export type SignupRole = (typeof VALID_ROLES)[number];
+
+function isSignupRole(value: string): value is SignupRole {
+  return (VALID_ROLES as readonly string[]).includes(value);
+}
+
 export async function signup(
   email: string,
   password: string,
   name: string,
-  _role: string
+  role: string
 ) {
+  if (!isSignupRole(role)) {
+    throw new Error(
+      `Invalid role "${role}". Expected one of: ${VALID_ROLES.join(", ")}.`
+    );
+  }
+
   const cleanEmail = email.trim().toLowerCase();
 
   const cred = await createUserWithEmailAndPassword(
@@ -34,7 +52,7 @@ export async function signup(
   await setDoc(doc(db, "users", cred.user.uid), {
     email: cleanEmail,
     name: name.trim(),
-    role: "supplier",
+    role,
     status: "active",
     createdAt: serverTimestamp(),
   });

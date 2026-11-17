@@ -4,7 +4,6 @@ import {
   doc,
   query,
   where,
-  orderBy,
   onSnapshot,
   updateDoc,
   addDoc,
@@ -84,10 +83,11 @@ export function subscribeToNotifications(
     }
   };
 
+  // No orderBy here on purpose: combining where() with orderBy() would
+  // require a composite Firestore index. Results are sorted in notify().
   const userQuery = query(
     collection(db, "notifications"),
     where("userId", "==", userId),
-    orderBy("createdAt", "desc"),
   );
 
   const unsubscribeUser = onSnapshot(
@@ -109,7 +109,6 @@ export function subscribeToNotifications(
     const roleQuery = query(
       collection(db, "notifications"),
       where("recipientRole", "==", role),
-      orderBy("createdAt", "desc"),
     );
 
     unsubscribeRole = onSnapshot(

@@ -74,6 +74,7 @@ import {
   createPurchaseOrder,
   subscribeToOrders,
   subscribeToSupplierOrders,
+  confirmOrderReceipt,
   updateOrderStatus,
 } from "./services/orderService";
 
@@ -87,6 +88,9 @@ import type {
   StockMovement,
   Supplier,
 } from "./types";
+
+import { collection, onSnapshot } from "firebase/firestore";
+import { db } from "./lib/firebase";
 
 import "./App.css";
 
@@ -129,6 +133,7 @@ const navByRole: Record<UserRole, NavEntry[]> = {
   warehouse_manager: [
     { label: "Overview", path: "/overview" },
     { label: "Inventory", path: "/inventory" },
+    { label: "Suppliers", path: "/suppliers" },
     { label: "Orders", path: "/orders" },
     { label: "Notifications", path: "/notifications" },
     { label: "Settings", path: "/settings" },
@@ -167,41 +172,84 @@ function titleCase(status: string) {
  * Shared Firestore hooks
  * ------------------------------------------------------------------ */
 
-function useProducts() {
+/** Total registered accounts. Admin-only: suppliers and managers
+ *  have no reason to read the users collection. */
+function useUserCount(enabled: boolean) {
+  const [count, setCount] = useState(0);
+
+  useEffect(() => {
+    if (!enabled) {
+      setCount(0);
+      return;
+    }
+
+    const unsubscribe = onSnapshot(
+      collection(db, "users"),
+      (snapshot) => setCount(snapshot.size),
+      (error) => console.error("User count subscription failed:", error),
+    );
+
+    return () => unsubscribe();
+  }, [enabled]);
+
+  return count;
+}
+
+/** `enabled` is false for suppliers, who must not read company inventory. */
+function useProducts(enabled = true) {
   const [products, setProducts] = useState<Product[]>([]);
 
   useEffect(() => {
+    if (!enabled) {
+      setProducts([]);
+      return;
+    }
+
     const unsubscribe = subscribeToProducts(
       (next) => setProducts(next),
       (error) => console.error("Products subscription failed:", error),
     );
 
     return () => unsubscribe();
-  }, []);
+  }, [enabled]);
 
   return products;
 }
 
-function useSuppliers() {
+/** `enabled` is false for suppliers, who must not see other suppliers. */
+function useSuppliers(enabled = true) {
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
 
   useEffect(() => {
+    if (!enabled) {
+      setSuppliers([]);
+      return;
+    }
+
     const unsubscribe = subscribeToSuppliers(
       (next) => setSuppliers(next),
       (error) => console.error("Suppliers subscription failed:", error),
     );
 
     return () => unsubscribe();
-  }, []);
+  }, [enabled]);
 
   return suppliers;
 }
 
 /** Orders scoped to the signed-in supplier's own supplier record. */
-function useOrders(role: UserRole, supplierId: string | null) {
+function useOrders(role: UserRole | null, supplierId: string | null) {
   const [orders, setOrders] = useState<any[]>([]);
 
   useEffect(() => {
+    // Wait for the role before opening any subscription.
+    if (!role) {
+      setOrders([]);
+      return;
+    }
+
+    // Only a supplier is scoped to their own supplier record.
+    // Admins and warehouse managers subscribe to every order.
     if (role === "supplier") {
       if (!supplierId) {
         setOrders([]);
@@ -223,7 +271,7 @@ function useOrders(role: UserRole, supplierId: string | null) {
   return orders;
 }
 
-function useNotifications(uid: string | null) {
+function useNotifications(uid: string | null, role: UserRole | null) {
   const [notifications, setNotifications] = useState<any[]>([]);
 
   useEffect(() => {
@@ -232,10 +280,16 @@ function useNotifications(uid: string | null) {
       return;
     }
 
-    const unsubscribe = subscribeToNotifications(uid, setNotifications);
+    // Role is passed so broadcast notifications (e.g. order status
+    // updates addressed to "warehouse_manager") also reach this user.
+    const unsubscribe = subscribeToNotifications(
+      uid,
+      setNotifications,
+      role ?? undefined,
+    );
 
     return () => unsubscribe();
-  }, [uid]);
+  }, [uid, role]);
 
   return notifications;
 }
@@ -317,16 +371,6 @@ function money(value: number): string {
   return `$${(Number(value) || 0).toLocaleString(undefined, {
     maximumFractionDigits: 0,
   })}`;
-}
-
-function compactMoney(value: number): string {
-  const amount = Number(value) || 0;
-
-  if (amount >= 1000) {
-    return `$${(amount / 1000).toFixed(1)}k`;
-  }
-
-  return `$${amount.toFixed(0)}`;
 }
 
 function pad(value: number): string {
@@ -874,7 +918,11 @@ function Dashboard() {
   const loc = useLocation();
 
   const resolvedRole = user?.role ?? null;
-  const effectiveRole: UserRole = resolvedRole ?? "supplier";
+
+  // Never guess a role. An unresolved role renders the loading state
+  // below; falling back to "supplier" here would show the supplier
+  // sidebar, nav and orders view to admins and warehouse managers.
+  const effectiveRole: UserRole | null = resolvedRole;
 
   const [search, setSearch] = useState("");
   const [mobile, setMobile] = useState(false);
@@ -882,11 +930,17 @@ function Dashboard() {
 
   const name = user?.fullName || "Team member";
 
-  const navItems = navByRole[effectiveRole];
-  const permitted = allowedPaths(effectiveRole);
+  const navItems = effectiveRole ? navByRole[effectiveRole] : [];
+  const permitted = effectiveRole ? allowedPaths(effectiveRole) : [];
 
-  const suppliers = useSuppliers();
-  const products = useProducts();
+  // Suppliers see only their own orders: no company inventory and no
+  // other supplier records are loaded into their session at all.
+  const isStaff =
+    effectiveRole === "admin" || effectiveRole === "warehouse_manager";
+
+  const suppliers = useSuppliers(isStaff);
+  const products = useProducts(isStaff);
+  const userCount = useUserCount(effectiveRole === "admin");
 
   /** Resolve the supplier ID from AuthContext first, then supplier records. */
   const ownSupplierId = useMemo(() => {
@@ -901,7 +955,10 @@ function Dashboard() {
 
   const orders = useOrders(effectiveRole, ownSupplierId);
 
-  const notifications = useNotifications(user?.uid ?? null);
+  const notifications = useNotifications(
+    user?.uid ?? null,
+    resolvedRole,
+  );
 
   const unread = notifications.filter((item) => !item.read).length;
 
@@ -922,7 +979,7 @@ function Dashboard() {
     setMobile(false);
   };
 
-  if (!resolvedRole) {
+  if (!effectiveRole) {
     return (
       <div className="page-loading">
         <span className="loader" />
@@ -1134,8 +1191,9 @@ function Dashboard() {
           </span>
 
           <div>
-            {products.length} products · {suppliers.length} suppliers ·{" "}
-            {orders.length} orders
+            {isStaff
+              ? `${products.length} products · ${suppliers.length} suppliers · ${orders.length} orders`
+              : `${orders.length} orders`}
           </div>
         </div>
 
@@ -1163,6 +1221,7 @@ function Dashboard() {
                   products={products}
                   suppliers={suppliers}
                   orders={orders}
+                  userCount={userCount}
                   lowStock={lowStock}
                   name={name}
                   notify={setNotice}
@@ -1219,6 +1278,7 @@ function Dashboard() {
                   search={search}
                   notify={setNotice}
                   currentUid={user?.uid ?? ""}
+                  ownSupplierId={ownSupplierId}
                 />
               }
             />
@@ -1321,6 +1381,7 @@ function Overview({
   products,
   suppliers,
   orders,
+  userCount,
   lowStock,
   name,
   notify,
@@ -1330,6 +1391,7 @@ function Overview({
   products: Product[];
   suppliers: Supplier[];
   orders: any[];
+  userCount: number;
   lowStock: Product[];
   name: string;
   notify: (v: string) => void;
@@ -1338,23 +1400,11 @@ function Overview({
   const greeting = name.trim().split(/\s+/)[0] || "there";
   const title = `Good morning, ${greeting} 👋`;
 
-  const inventoryValue = products.reduce(
-    (total, product) =>
-      total +
-      (Number(product.price) || 0) *
-        (Number(product.quantity) || 0),
-    0,
-  );
-
   const availableStock = products.reduce(
     (total, product) =>
       total + (Number(product.quantity) || 0),
     0,
   );
-
-  const outOfStock = products.filter(
-    (product) => (product.quantity ?? 0) === 0,
-  ).length;
 
   const byStatus = (status: string) =>
     orders.filter(
@@ -1362,12 +1412,20 @@ function Overview({
         normalizedStatus(order.status) === normalizedStatus(status),
     ).length;
 
+  // Orders that have shipped but whose receipt has not been confirmed.
+  const inTransit = orders.filter(
+    (order) =>
+      normalizedStatus(order.status) === "shipped" &&
+      !order.receiptConfirmed,
+  ).length;
+
   const metrics: string[][] =
     role === "supplier"
       ? [
           ["Assigned orders", pad(orders.length), "", "Orders currently with you"],
           ["Pending orders", pad(byStatus("pending")), "", "Awaiting your confirmation"],
           ["Approved", pad(byStatus("approved")), "", "Ready to prepare"],
+          ["Processing", pad(byStatus("processing")), "", "Being prepared now"],
           ["Shipped", pad(byStatus("shipped")), "", "On the way to customers"],
           ["Delivered", pad(byStatus("delivered")), "", "Completed this month"],
         ]
@@ -1376,13 +1434,13 @@ function Overview({
             ["Total products", products.length.toLocaleString(), "", "Across all locations"],
             ["Available stock", availableStock.toLocaleString(), "", "Units ready to move"],
             ["Low stock products", pad(lowStock.length), "", "Need your attention"],
-            ["Out of stock", pad(outOfStock), "", "Restock required"],
+            ["In transit", pad(inTransit), "", "Shipped, awaiting receipt"],
             ["Pending purchase orders", pad(byStatus("pending")), "", "Awaiting approval"],
           ]
         : [
             ["Total products", products.length.toLocaleString(), "", "Across all locations"],
             ["Total suppliers", suppliers.length.toLocaleString(), "", "Trusted partners"],
-            ["Inventory value", compactMoney(inventoryValue), "", "Across all locations"],
+            ["Total users", userCount.toLocaleString(), "", "Registered accounts"],
             ["Total orders", orders.length.toLocaleString(), "", "All time"],
             ["Low stock items", pad(lowStock.length), "", "Need your attention"],
             ["Pending orders", pad(byStatus("pending")), "", "Awaiting approval"],
@@ -1490,7 +1548,7 @@ function Overview({
                 title="Order trend"
                 subtitle="Orders assigned to you each month"
               />
-              <OrderTrendChart />
+              <OrderTrendChart orders={orders} />
             </div>
           </div>
 
@@ -1575,7 +1633,7 @@ function Overview({
                 title="Order trend"
                 subtitle="Purchase orders created each month"
               />
-              <OrderTrendChart />
+              <OrderTrendChart orders={orders} />
             </div>
 
             <div className="panel chart-panel">
@@ -1884,20 +1942,17 @@ function OrderTable({
 function nextStatuses(role: UserRole, status: string): string[] {
   const current = normalizedStatus(status);
 
+  // The supplier owns the whole fulfilment chain: they accept or reject
+  // the request, then move it forward until it ships.
   if (role === "supplier") {
+    if (current === "pending") return ["Approved", "Rejected"];
     if (current === "approved") return ["Processing"];
     if (current === "processing") return ["Shipped"];
     return [];
   }
 
-  if (current === "pending") {
-    return ["Approved", "Rejected"];
-  }
-
-  if (current === "shipped") {
-    return ["Delivered"];
-  }
-
+  // Admins and warehouse managers never set a status directly. Delivery
+  // is recorded by confirming receipt, which also restocks inventory.
   return [];
 }
 
@@ -1909,6 +1964,7 @@ function OrdersContent({
   search,
   notify,
   currentUid,
+  ownSupplierId = null,
 }: {
   role: UserRole;
   orders: any[];
@@ -1917,11 +1973,14 @@ function OrdersContent({
   search: string;
   notify: (v: string) => void;
   currentUid: string;
+  /** Supplier record linked to the signed-in supplier account, if any. */
+  ownSupplierId?: string | null;
 }) {
   const [statusFilter, setStatusFilter] = useState("All statuses");
   const [localSearch, setLocalSearch] = useState("");
   const [busyId, setBusyId] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [detailOrder, setDetailOrder] = useState<any | null>(null);
 
   const term = (search || localSearch).toLowerCase();
 
@@ -1968,6 +2027,43 @@ function OrdersContent({
     }
   };
 
+  /**
+   * Warehouse receipt confirmation. Sends the full ordered quantity as
+   * received; orderService applies the stock increase, writes the stock
+   * movement and marks the order Delivered in one transaction.
+   */
+  const confirmDelivery = async (order: any) => {
+    if (!currentUid) {
+      notify("You must be signed in to confirm a delivery.");
+      return;
+    }
+
+    setBusyId(order.id);
+
+    try {
+      const receivedItems = (order.items ?? []).map((item: any) => ({
+        productId: item.productId,
+        receivedQuantity: Number(item.orderedQuantity) || 0,
+      }));
+
+      await confirmOrderReceipt(order.id, receivedItems, currentUid);
+
+      notify(
+        `Delivery confirmed for order #${String(order.id).slice(0, 8)}. Inventory updated.`,
+      );
+    } catch (error) {
+      console.error("Delivery confirmation failed:", error);
+
+      notify(
+        error instanceof Error
+          ? error.message
+          : "Could not confirm the delivery. Check your access and try again.",
+      );
+    } finally {
+      setBusyId("");
+    }
+  };
+
   return (
     <>
       <PageTitle
@@ -1991,6 +2087,14 @@ function OrdersContent({
           )
         }
       />
+
+      {role === "supplier" && !ownSupplierId && (
+        <div className="provision-feedback error" role="alert">
+          Your login is not linked to a supplier record yet, so no
+          purchase orders can be shown. Ask an administrator to link
+          your account from Administration · Team access.
+        </div>
+      )}
 
       <div className="stats-grid compact-stats">
         <div className="stat-card">
@@ -2100,12 +2204,37 @@ function OrdersContent({
           actions={(order) => {
             const options = nextStatuses(role, order.status);
 
-            if (!options.length) {
-              return <button className="row-menu">•••</button>;
+            // The warehouse confirms receipt of a shipped order, which
+            // is what restocks inventory.
+            const canConfirmDelivery =
+              role === "warehouse_manager" &&
+              normalizedStatus(order.status) === "shipped" &&
+              !order.receiptConfirmed;
+
+            if (!options.length && !canConfirmDelivery) {
+              return (
+                <div className="order-actions">
+                  <button
+                    className="mini-link"
+                    onClick={() => setDetailOrder(order)}
+                  >
+                    Details
+                  </button>
+
+                  <button className="row-menu">•••</button>
+                </div>
+              );
             }
 
             return (
               <div className="order-actions">
+                <button
+                  className="mini-link"
+                  onClick={() => setDetailOrder(order)}
+                >
+                  Details
+                </button>
+
                 {options.map((status) => (
                   <button
                     key={status}
@@ -2118,6 +2247,18 @@ function OrdersContent({
                       : titleCase(status)}
                   </button>
                 ))}
+
+                {canConfirmDelivery && (
+                  <button
+                    className="mini-link"
+                    disabled={busyId === order.id}
+                    onClick={() => confirmDelivery(order)}
+                  >
+                    {busyId === order.id
+                      ? "Updating…"
+                      : "Confirm Delivery"}
+                  </button>
+                )}
               </div>
             );
           }}
@@ -2160,6 +2301,16 @@ function OrdersContent({
         </span>
       </div>
 
+      {detailOrder && (
+        <OrderDetailsDialog
+          order={detailOrder}
+          supplierName={
+            supplierName(detailOrder.supplierId) || "—"
+          }
+          close={() => setDetailOrder(null)}
+        />
+      )}
+
       {dialogOpen && (
         <NewOrderDialog
           suppliers={suppliers}
@@ -2176,6 +2327,136 @@ function OrdersContent({
 /* ------------------------------------------------------------------ *
  * New purchase order dialog
  * ------------------------------------------------------------------ */
+
+/**
+ * Read-only breakdown of a purchase order's line items. Available to
+ * every role; the orders list already limits which orders are visible.
+ */
+function OrderDetailsDialog({
+  order,
+  supplierName,
+  close,
+}: {
+  order: any;
+  supplierName: string;
+  close: () => void;
+}) {
+  const items: any[] = Array.isArray(order.items) ? order.items : [];
+
+  return (
+    <div
+      className="provision-overlay"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) close();
+      }}
+    >
+      <section
+        className="provision-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="order-details-title"
+      >
+        <div className="provision-heading">
+          <div>
+            <span className="section-kicker">PROCUREMENT</span>
+
+            <h2 id="order-details-title">
+              {order.orderNumber ||
+                `Order #${String(order.id).slice(0, 8)}`}
+            </h2>
+
+            <p>
+              {supplierName} · {shortDate(order.createdAt)}
+            </p>
+          </div>
+
+          <button
+            className="icon-btn"
+            aria-label="Close"
+            onClick={close}
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="delivery-stats">
+          <span>
+            Status <b>{titleCase(order.status)}</b>
+          </span>
+
+          <span>
+            Order total <b>{money(order.totalAmount)}</b>
+          </span>
+
+          <span>
+            Receipt confirmed{" "}
+            <b>{order.receiptConfirmed ? "Yes" : "No"}</b>
+          </span>
+
+          {order.rejectionReason && (
+            <span>
+              Rejection reason <b>{order.rejectionReason}</b>
+            </span>
+          )}
+        </div>
+
+        <div className="table-scroll">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>PRODUCT</th>
+                <th>SKU</th>
+                <th>QTY</th>
+                <th>RECEIVED</th>
+                <th>UNIT PRICE</th>
+                <th>LINE TOTAL</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {items.map((item, index) => (
+                <tr key={`${item.productId}-${index}`}>
+                  <td className="table-id">
+                    {item.productName || "—"}
+                  </td>
+
+                  <td>{item.sku || "—"}</td>
+
+                  <td>{item.orderedQuantity ?? 0}</td>
+
+                  <td>{item.receivedQuantity ?? 0}</td>
+
+                  <td>{money(item.unitPrice)}</td>
+
+                  <td>
+                    {money(
+                      (Number(item.unitPrice) || 0) *
+                        (Number(item.orderedQuantity) || 0),
+                    )}
+                  </td>
+                </tr>
+              ))}
+
+              {items.length === 0 && (
+                <tr>
+                  <td colSpan={6}>
+                    No line items recorded for this order.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="provision-actions">
+          <button className="button secondary" onClick={close}>
+            Close
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
 
 function NewOrderDialog({
   suppliers,
@@ -2223,6 +2504,13 @@ function NewOrderDialog({
 
     if (!supplier) {
       setFormError("Selected supplier does not exist.");
+      return;
+    }
+
+    if (!supplier.userId) {
+      setFormError(
+        "This supplier has no linked login account, so they would never see the order. Ask an administrator to link it first.",
+      );
       return;
     }
 
@@ -2350,8 +2638,10 @@ function NewOrderDialog({
                 <option
                   key={supplier.id}
                   value={supplier.id}
+                  disabled={!supplier.userId}
                 >
                   {supplier.company || supplier.name}
+                  {supplier.userId ? "" : " — no linked account"}
                 </option>
               ))}
             </select>

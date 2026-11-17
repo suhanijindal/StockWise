@@ -10,6 +10,8 @@ import {
   deleteSupplier as deleteSupplierService,
 } from "../services/supplierService";
 
+import { useAuth } from "../services/AuthContext";
+
 import {
   Search,
   Plus,
@@ -34,6 +36,11 @@ const emptyForm = {
 type SupplierForm = typeof emptyForm;
 
 export default function SuppliersPage() {
+  // Only admins register or edit supplier records. Warehouse managers
+  // need the list to raise purchase orders, but read-only.
+  const { role } = useAuth();
+  const canManageSuppliers = role === "admin";
+
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [search, setSearch] = useState("");
   const [showForm, setShowForm] = useState(false);
@@ -256,13 +263,15 @@ export default function SuppliersPage() {
           </p>
         </div>
 
-        <button
-          onClick={openAddForm}
-          className="flex items-center gap-2 bg-[#2563EB] text-white px-4 py-3 rounded-lg hover:bg-blue-700 transition"
-        >
-          <Plus size={18} />
-          Add Supplier
-        </button>
+        {canManageSuppliers && (
+          <button
+            onClick={openAddForm}
+            className="flex items-center gap-2 bg-[#2563EB] text-white px-4 py-3 rounded-lg hover:bg-blue-700 transition"
+          >
+            <Plus size={18} />
+            Add Supplier
+          </button>
+        )}
       </div>
 
       {/* Error message */}
@@ -376,27 +385,31 @@ export default function SuppliersPage() {
 
                   <td className="px-5 py-4">
                     <div className="flex gap-3">
-                      <button
-                        onClick={() => openEditForm(supplier)}
-                        title="Edit supplier"
-                        className="text-blue-600 hover:text-blue-800"
-                        disabled={deletingId === supplier.id}
-                      >
-                        <Pencil size={17} />
-                      </button>
+                      {canManageSuppliers && (
+                        <>
+                          <button
+                            onClick={() => openEditForm(supplier)}
+                            title="Edit supplier"
+                            className="text-blue-600 hover:text-blue-800"
+                            disabled={deletingId === supplier.id}
+                          >
+                            <Pencil size={17} />
+                          </button>
 
-                      <button
-                        onClick={() => handleDeleteSupplier(supplier.id)}
-                        title="Delete supplier"
-                        className="text-red-500 hover:text-red-700 disabled:opacity-40"
-                        disabled={deletingId !== null}
-                      >
-                        {deletingId === supplier.id ? (
-                          <span className="text-xs">...</span>
-                        ) : (
-                          <Trash2 size={17} />
-                        )}
-                      </button>
+                          <button
+                            onClick={() => handleDeleteSupplier(supplier.id)}
+                            title="Delete supplier"
+                            className="text-red-500 hover:text-red-700 disabled:opacity-40"
+                            disabled={deletingId !== null}
+                          >
+                            {deletingId === supplier.id ? (
+                              <span className="text-xs">...</span>
+                            ) : (
+                              <Trash2 size={17} />
+                            )}
+                          </button>
+                        </>
+                      )}
                     </div>
                   </td>
                 </tr>

@@ -17,7 +17,7 @@ import {
 } from "firebase/auth";
 
 import type { User as FirebaseUser } from "firebase/auth";
-import { doc, getDoc } from "firebase/firestore";
+import { doc, onSnapshot } from "firebase/firestore";
 
 import { auth, db } from "../lib/firebase";
 
@@ -25,7 +25,6 @@ import {
   signup,
   login as loginUser,
   logout as logoutUser,
-  getUserRole,
   onAuthChange,
 } from "./authService";
 
@@ -123,64 +122,74 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let active = true;
+    let unsubscribeProfile: (() => void) | null = null;
 
-    const unsubscribe = onAuthChange(async (current) => {
+    const stopProfileWatch = () => {
+      unsubscribeProfile?.();
+      unsubscribeProfile = null;
+    };
+
+    const unsubscribe = onAuthChange((current) => {
       if (!active) return;
+
+      stopProfileWatch();
 
       setFirebaseUser(current);
       setLoading(true);
-
-      if (!current) {
-        setRole(null);
-        setProfileName("");
-        setSupplierId(null);
-        setLoading(false);
-        return;
-      }
 
       // Clear the previous account's profile while loading the new one.
       setRole(null);
       setProfileName("");
       setSupplierId(null);
 
-      try {
-        const [fetchedRole, profileSnap] = await Promise.all([
-          getUserRole(current.uid),
-          getDoc(doc(db, "users", current.uid)),
-        ]);
+      if (!current) {
+        setLoading(false);
+        return;
+      }
 
-        if (!active) return;
+      // Watch the profile live rather than reading it once at sign-in.
+      // An admin changing a role (for example promoting a supplier to
+      // warehouse manager) must take effect in the open session, instead
+      // of leaving the shell on the stale role until the next sign-in.
+      unsubscribeProfile = onSnapshot(
+        doc(db, "users", current.uid),
+        (profileSnap) => {
+          if (!active) return;
 
-        const profile = profileSnap.exists()
-          ? profileSnap.data()
-          : {};
+          const profile = profileSnap.exists()
+            ? profileSnap.data()
+            : {};
 
-        setRole(isRole(fetchedRole) ? fetchedRole : null);
+          setRole(isRole(profile.role) ? profile.role : null);
 
-        setProfileName(
-          typeof profile.name === "string" ? profile.name : "",
-        );
+          setProfileName(
+            typeof profile.name === "string" ? profile.name : "",
+          );
 
-        setSupplierId(
-          typeof profile.supplierId === "string"
-            ? profile.supplierId
-            : null,
-        );
-      } catch (cause) {
-        console.error("Could not fetch user profile:", cause);
+          setSupplierId(
+            typeof profile.supplierId === "string"
+              ? profile.supplierId
+              : null,
+          );
 
-        if (active) {
+          setLoading(false);
+        },
+        (cause) => {
+          console.error("Could not read user profile:", cause);
+
+          if (!active) return;
+
           setRole(null);
           setProfileName("");
           setSupplierId(null);
-        }
-      } finally {
-        if (active) setLoading(false);
-      }
+          setLoading(false);
+        },
+      );
     });
 
     return () => {
       active = false;
+      stopProfileWatch();
       unsubscribe();
     };
   }, []);

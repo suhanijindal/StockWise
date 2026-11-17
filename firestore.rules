@@ -1,0 +1,174 @@
+rules_version = '2';
+
+// Supply chain integration — Firestore security rules.
+//
+// Roles live on /users/{uid}.role and are the single source of truth.
+// A supplier account is linked to a supplier record in two directions:
+//   users/{uid}.supplierId  ->  suppliers/{supplierId}
+//   suppliers/{id}.userId   ->  the Auth UID
+// Only an admin can write either link.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function profile() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function hasProfile() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function role() {
+      return hasProfile() ? profile().role : '';
+    }
+
+    function isActive() {
+      return hasProfile() && profile().get('status', 'active') == 'active';
+    }
+
+    function isAdmin() {
+      return isActive() && role() == 'admin';
+    }
+
+    function isManager() {
+      return isActive() && role() == 'warehouse_manager';
+    }
+
+    function isSupplier() {
+      return isActive() && role() == 'supplier';
+    }
+
+    function staff() {
+      return isAdmin() || isManager();
+    }
+
+    // The supplier record linked to the caller, or '' if unlinked.
+    function ownSupplierId() {
+      return isSupplier() ? profile().get('supplierId', '') : '';
+    }
+
+    // ---------------- users ----------------
+    match /users/{userId} {
+      // A user reads their own profile; admins read everyone.
+      // Managers may read profiles to resolve names on orders.
+      allow get: if signedIn() && (request.auth.uid == userId || isAdmin() || isManager());
+      allow list: if isAdmin() || isManager();
+
+      // Self-service signup creates the caller's own profile, always as a
+      // supplier with no supplier link and active status. Any later change
+      // to role, status or supplierId is an admin-only action.
+      allow create: if signedIn()
+        && request.auth.uid == userId
+        && request.resource.data.role == 'supplier'
+        && request.resource.data.get('status', 'active') == 'active'
+        && !('supplierId' in request.resource.data);
+
+      // A user may edit their own display fields only.
+      allow update: if signedIn()
+        && request.auth.uid == userId
+        && request.resource.data.role == resource.data.role
+        && request.resource.data.get('status', 'active') == resource.data.get('status', 'active')
+        && request.resource.data.get('supplierId', '') == resource.data.get('supplierId', '');
+
+      // Admins provision, link and deactivate accounts.
+      allow create, update: if isAdmin();
+      allow delete: if false;
+    }
+
+    // ---------------- suppliers ----------------
+    match /suppliers/{supplierId} {
+      allow read: if isActive();
+
+      // Only an admin registers, edits or removes supplier records.
+      // Warehouse managers read the list to raise purchase orders.
+      allow create, update, delete: if isAdmin();
+    }
+
+    // ---------------- products ----------------
+    match /products/{productId} {
+      allow read: if isActive();
+      allow create, update, delete: if staff();
+    }
+
+    // ---------------- orders ----------------
+    match /orders/{orderId} {
+      // Staff see every order; a supplier sees only their own.
+      allow get: if staff()
+        || (isSupplier() && resource.data.supplierId == ownSupplierId());
+
+      // Evaluated per candidate document: a supplier's query can only
+      // succeed if every document it would return is their own, which
+      // forces the client to filter by supplierId.
+      allow list: if staff()
+        || (
+          isSupplier()
+          && ownSupplierId() != ''
+          && resource.data.supplierId == ownSupplierId()
+        );
+
+      allow create: if staff()
+        && request.resource.data.status == 'Pending'
+        && request.resource.data.receiptConfirmed == false
+        && request.resource.data.items.size() > 0;
+
+      // Staff may change status and confirm receipt. A supplier may only
+      // move their own order forward and may not touch the money, the
+      // items or the receipt flag.
+      allow update: if staff()
+        || (
+          isSupplier()
+          && resource.data.supplierId == ownSupplierId()
+          && request.resource.data.supplierId == resource.data.supplierId
+          && request.resource.data.items == resource.data.items
+          && request.resource.data.totalAmount == resource.data.totalAmount
+          && request.resource.data.receiptConfirmed == resource.data.receiptConfirmed
+          // No 'Delivered': only the warehouse records a delivery, by
+          // confirming receipt, which is what restocks inventory.
+          && request.resource.data.status in ['Approved', 'Rejected', 'Processing', 'Shipped']
+        );
+
+      allow delete: if isAdmin();
+    }
+
+    // ---------------- stock movements ----------------
+    match /stockMovements/{movementId} {
+      allow read: if staff();
+      allow create: if staff() && request.resource.data.changedBy == request.auth.uid;
+      allow update, delete: if false;
+    }
+
+    // ---------------- notifications ----------------
+    match /notifications/{notificationId} {
+      // Addressed to a single user, or broadcast to a role.
+      allow get, list: if isActive() && (
+        resource.data.get('userId', '') == request.auth.uid
+        || resource.data.get('recipientRole', '') == role()
+      );
+
+      // Any signed-in participant may raise a notification (order created,
+      // status changed, low stock), but never pre-read.
+      allow create: if isActive() && request.resource.data.read == false;
+
+      // The recipient may only flip it to read.
+      allow update: if isActive()
+        && (
+          resource.data.get('userId', '') == request.auth.uid
+          || resource.data.get('recipientRole', '') == role()
+        )
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']);
+
+      allow delete: if isAdmin();
+    }
+
+    // Everything else is closed.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

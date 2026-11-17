@@ -23,6 +23,8 @@ import {
   doc,
   getDoc,
   getDocs,
+  query,
+  where,
   serverTimestamp,
   updateDoc,
   writeBatch,
@@ -178,6 +180,7 @@ export function AdminUserManagement({
   const [company, setCompany] = useState("");
   const [selectedSupplierId, setSelectedSupplierId] = useState("");
 
+  const [lookingUp, setLookingUp] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [loadingList, setLoadingList] = useState(true);
   const [loadingSuppliers, setLoadingSuppliers] = useState(false);
@@ -333,6 +336,63 @@ export function AdminUserManagement({
     setFormError("");
     setFormSuccess("");
     setDialogOpen(true);
+  };
+
+  /**
+   * Resolve the Firebase Auth UID from an email address by matching the
+   * user profile document that signup created (its doc ID is the UID).
+   */
+  const lookupUidByEmail = async () => {
+    const cleanEmail = email.trim().toLowerCase();
+
+    setFormError("");
+    setFormSuccess("");
+
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(cleanEmail)) {
+      setFormError("Enter a valid email address before looking up the UID.");
+      return;
+    }
+
+    setLookingUp(true);
+
+    try {
+      const matches = await getDocs(
+        query(
+          collection(db, "users"),
+          where("email", "==", cleanEmail),
+        ),
+      );
+
+      if (matches.empty) {
+        setFormError(
+          "No account profile found for that email. The user must sign up first, or the UID must be entered manually.",
+        );
+        return;
+      }
+
+      if (matches.size > 1) {
+        setFormError(
+          "More than one profile uses that email address. Enter the UID manually.",
+        );
+        return;
+      }
+
+      const match = matches.docs[0];
+      const data = match.data();
+
+      setUid(match.id);
+
+      if (!fullName.trim() && typeof data.name === "string") {
+        setFullName(data.name);
+      }
+
+      setFormSuccess(`UID found for ${cleanEmail}.`);
+    } catch (error) {
+      console.error("UID lookup failed:", error);
+      setFormError(safeErrorMessage(error));
+    } finally {
+      setLookingUp(false);
+    }
   };
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
@@ -797,7 +857,7 @@ export function AdminUserManagement({
                   maxLength={128}
                   required
                   placeholder="Paste the existing account UID"
-                  disabled={submitting}
+                  disabled={submitting || lookingUp}
                 />
 
                 <small>
@@ -833,6 +893,20 @@ export function AdminUserManagement({
                   placeholder="name@company.com"
                   disabled={submitting}
                 />
+
+                <button
+                  type="button"
+                  className="button ghost"
+                  onClick={lookupUidByEmail}
+                  disabled={submitting || lookingUp}
+                >
+                  {lookingUp ? "Looking up…" : "Find UID from this email"}
+                </button>
+
+                <small>
+                  Fills the UID automatically if the person has already
+                  signed up.
+                </small>
               </label>
 
               <label>

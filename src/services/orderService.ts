@@ -251,8 +251,20 @@ export const updateOrderStatus = async (
     updatedAt: serverTimestamp(),
   });
 
+  // Supplier-driven transitions are reported to the warehouse team.
+  // A delivery is reported back to the supplier instead.
+  const notifySupplier = normalizedStatus === "Delivered";
+
+  let supplierUserId: string | null = null;
+
+  if (notifySupplier) {
+    supplierUserId = await resolveSupplierUserId(orderId, extraData);
+  }
+
   await addDoc(collection(db, NOTIFICATIONS_COLLECTION), {
-    recipientRole: "warehouse_manager",
+    ...(notifySupplier
+      ? { userId: supplierUserId, recipientRole: "supplier" }
+      : { recipientRole: "warehouse_manager" }),
     title: `Order ${normalizedStatus}`,
     message: `Order #${orderId.slice(0, 6)} status updated to ${normalizedStatus}.`,
     type: "order_status",
@@ -260,6 +272,49 @@ export const updateOrderStatus = async (
     read: false,
     createdAt: serverTimestamp(),
   });
+};
+
+/**
+ * Best-effort lookup of the Auth UID behind an order's supplier, so a
+ * notification can be addressed to that supplier directly. Returns null
+ * when the supplier has no linked login account.
+ */
+const resolveSupplierUserId = async (
+  orderId: string,
+  known?: any,
+): Promise<string | null> => {
+  try {
+    let supplierId = known?.supplierId;
+
+    if (typeof supplierId !== "string" || !supplierId) {
+      const orderSnap = await getDoc(
+        doc(db, ORDERS_COLLECTION, orderId),
+      );
+
+      supplierId = orderSnap.exists()
+        ? orderSnap.data().supplierId
+        : null;
+    }
+
+    if (typeof supplierId !== "string" || !supplierId) {
+      return null;
+    }
+
+    const supplierSnap = await getDoc(
+      doc(db, SUPPLIERS_COLLECTION, supplierId),
+    );
+
+    const userId = supplierSnap.exists()
+      ? supplierSnap.data().userId
+      : null;
+
+    return typeof userId === "string" && userId.trim()
+      ? userId
+      : null;
+  } catch (error) {
+    console.error("Could not resolve supplier recipient:", error);
+    return null;
+  }
 };
 
 
@@ -299,9 +354,16 @@ export const confirmOrderReceipt = async (
 
     const order = orderSnap.data() as PurchaseOrder;
 
-    if (order.status !== "Delivered") {
+    // The warehouse confirms receipt of a shipment. Marking the order
+    // Delivered, restocking inventory and writing the stock movement all
+    // happen inside this one transaction, so stock can never move
+    // without the order being delivered (and vice versa).
+    if (
+      order.status !== "Shipped" &&
+      order.status !== "Delivered"
+    ) {
       throw new Error(
-        "Order must be marked as Delivered before confirming receipt.",
+        "Order must be marked as Shipped by the supplier before confirming receipt.",
       );
     }
 
@@ -401,6 +463,26 @@ export const confirmOrderReceipt = async (
       );
     }
 
+    // Read the supplier before any writes so the delivery notification
+    // can be addressed to their login account.
+
+    let supplierUserId: string | null = null;
+
+    if (order.supplierId) {
+      const supplierSnap = await transaction.get(
+        doc(db, SUPPLIERS_COLLECTION, order.supplierId),
+      );
+
+      const linkedId = supplierSnap.exists()
+        ? supplierSnap.data().userId
+        : null;
+
+      supplierUserId =
+        typeof linkedId === "string" && linkedId.trim()
+          ? linkedId
+          : null;
+    }
+
     // Read every product before performing any writes.
 
     const productRefs = order.items.map((item) =>
@@ -491,10 +573,29 @@ export const confirmOrderReceipt = async (
 
     transaction.update(orderRef, {
       items: updatedItems,
+      status: "Delivered",
       receiptConfirmed: true,
       confirmedAt: serverTimestamp(),
       confirmedBy: warehouseManagerUid,
       updatedAt: serverTimestamp(),
     });
+
+    // Tell the supplier their delivery was received.
+    if (supplierUserId) {
+      const notificationRef = doc(
+        collection(db, NOTIFICATIONS_COLLECTION),
+      );
+
+      transaction.set(notificationRef, {
+        userId: supplierUserId,
+        recipientRole: "supplier",
+        title: "Delivery Confirmed",
+        message: `Order ${order.orderNumber} was received and confirmed by the warehouse.`,
+        type: "order_update",
+        relatedId: orderId,
+        read: false,
+        createdAt: serverTimestamp(),
+      });
+    }
   });
 };

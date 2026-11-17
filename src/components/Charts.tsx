@@ -17,7 +17,6 @@ import {
 } from "recharts";
 
 import { subscribeToProducts } from "../services/productService";
-import { subscribeToOrders } from "../services/orderService";
 import type { Product } from "../types";
 
 /** Palette taken from the StockWise stylesheet so the charts match the shell. */
@@ -58,17 +57,6 @@ function useProducts() {
   }, []);
 
   return products;
-}
-
-function useOrders() {
-  const [orders, setOrders] = useState<any[]>([]);
-
-  useEffect(() => {
-    const unsubscribe = subscribeToOrders((next) => setOrders(next));
-    return () => unsubscribe();
-  }, []);
-
-  return orders;
 }
 
 function Empty({ label }: { label: string }) {
@@ -191,8 +179,10 @@ const MONTHS = [
 ];
 
 /** Orders placed and total value, by month, for the last 12 months. */
-export function OrderTrendChart() {
-  const orders = useOrders();
+export function OrderTrendChart({ orders }: { orders: any[] }) {
+  // Orders are supplied by the caller so this chart only ever plots the
+  // orders that caller is allowed to see. A supplier must not be shown
+  // company-wide order volume.
 
   const data = useMemo(() => {
     const now = new Date();

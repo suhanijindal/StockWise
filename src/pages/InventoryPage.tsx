@@ -13,6 +13,8 @@ import {
   subscribeToStockMovements,
 } from "../services/productService";
 
+import { useAuth } from "../services/AuthContext";
+
 import { subscribeToSuppliers } from "../services/supplierService";
 import { auth } from "../lib/firebase";
 
@@ -79,6 +81,11 @@ function formatDate(timestamp: StockMovement["timestamp"]): string {
 }
 
 export default function InventoryPage() {
+  // Warehouse managers move stock but do not change product records.
+  // Adding, editing and deleting products is an admin action.
+  const { role } = useAuth();
+  const canManageProducts = role === "admin";
+
   const [products, setProducts] = useState<Product[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [stockMovements, setStockMovements] = useState<StockMovement[]>([]);
@@ -548,14 +555,16 @@ export default function InventoryPage() {
           </p>
         </div>
 
-        <button
-          onClick={openAddForm}
-          disabled={suppliers.length === 0}
-          className="flex items-center gap-2 bg-[#2563EB] text-white px-4 py-3 rounded-lg hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          <Plus size={18} />
-          Add Product
-        </button>
+        {canManageProducts && (
+          <button
+            onClick={openAddForm}
+            disabled={suppliers.length === 0}
+            className="flex items-center gap-2 bg-[#2563EB] text-white px-4 py-3 rounded-lg hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <Plus size={18} />
+            Add Product
+          </button>
+        )}
       </div>
 
       {pageError && (
@@ -731,21 +740,25 @@ export default function InventoryPage() {
                           <MinusCircle size={18} />
                         </button>
 
-                        <button
-                          onClick={() => openEditForm(product)}
-                          title="Edit product"
-                          className="text-blue-600 hover:text-blue-800"
-                        >
-                          <Pencil size={17} />
-                        </button>
+                        {canManageProducts && (
+                          <>
+                            <button
+                              onClick={() => openEditForm(product)}
+                              title="Edit product"
+                              className="text-blue-600 hover:text-blue-800"
+                            >
+                              <Pencil size={17} />
+                            </button>
 
-                        <button
-                          onClick={() => handleDeleteProduct(product.id)}
-                          title="Delete product"
-                          className="text-red-500 hover:text-red-700"
-                        >
-                          <Trash2 size={17} />
-                        </button>
+                            <button
+                              onClick={() => handleDeleteProduct(product.id)}
+                              title="Delete product"
+                              className="text-red-500 hover:text-red-700"
+                            >
+                              <Trash2 size={17} />
+                            </button>
+                          </>
+                        )}
                       </div>
                     </td>
                   </tr>
