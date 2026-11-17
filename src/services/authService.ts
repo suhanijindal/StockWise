@@ -14,7 +14,7 @@ import {
   getDocs,
   query,
   where,
-  writeBatch,
+  updateDoc,
   serverTimestamp,
 } from "firebase/firestore";
 
@@ -133,9 +133,11 @@ export async function autoLinkSupplierByEmail(
       const fallbackName =
         displayName.trim() || cleanEmail.split("@")[0] || "New supplier";
 
-      const batch = writeBatch(db);
-
-      batch.set(newSupplierRef, {
+      // Written one after the other, not as a batch. The security rule
+      // for the user document checks that the supplier record exists and
+      // belongs to this account, and reads inside a batch see the state
+      // from before the batch, so the record has to land first.
+      await setDoc(newSupplierRef, {
         name: fallbackName,
         company: fallbackName,
         email: cleanEmail,
@@ -145,13 +147,11 @@ export async function autoLinkSupplierByEmail(
         createdAt: serverTimestamp(),
       });
 
-      batch.set(
+      await setDoc(
         doc(db, "users", uid),
         { supplierId: newSupplierRef.id },
         { merge: true }
       );
-
-      await batch.commit();
 
       return newSupplierRef.id;
     }
@@ -169,16 +169,15 @@ export async function autoLinkSupplierByEmail(
       return supplierDoc.id;
     }
 
-    const batch = writeBatch(db);
+    // Same ordering requirement as above: claim the supplier record
+    // first, then point the user profile at it.
+    await updateDoc(supplierDoc.ref, { userId: uid });
 
-    batch.update(supplierDoc.ref, { userId: uid });
-    batch.set(
+    await setDoc(
       doc(db, "users", uid),
       { supplierId: supplierDoc.id },
       { merge: true }
     );
-
-    await batch.commit();
 
     return supplierDoc.id;
   } catch (error) {
