@@ -262,9 +262,11 @@ export const updateOrderStatus = async (
   }
 
   await addDoc(collection(db, NOTIFICATIONS_COLLECTION), {
+    // userId null marks a genuine role broadcast; anything addressed to
+    // one account carries that account's UID instead.
     ...(notifySupplier
       ? { userId: supplierUserId, recipientRole: "supplier" }
-      : { recipientRole: "warehouse_manager" }),
+      : { userId: null, recipientRole: "warehouse_manager" }),
     title: `Order ${normalizedStatus}`,
     message: `Order #${orderId.slice(0, 6)} status updated to ${normalizedStatus}.`,
     type: "order_status",

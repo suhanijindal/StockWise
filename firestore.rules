@@ -202,9 +202,15 @@ service cloud.firestore {
     // ---------------- notifications ----------------
     match /notifications/{notificationId} {
       // Addressed to a single user, or broadcast to a role.
+      // Addressed to this account, or broadcast to this role and to
+      // nobody in particular. A notification carrying another account's
+      // userId is never readable, whatever role it names.
       allow get, list: if isActive() && (
         resource.data.get('userId', '') == request.auth.uid
-        || resource.data.get('recipientRole', '') == role()
+        || (
+          resource.data.get('userId', '') == null
+          && resource.data.get('recipientRole', '') == role()
+        )
       );
 
       // Any signed-in participant may raise a notification (order created,
@@ -215,7 +221,10 @@ service cloud.firestore {
       allow update: if isActive()
         && (
           resource.data.get('userId', '') == request.auth.uid
-          || resource.data.get('recipientRole', '') == role()
+          || (
+            resource.data.get('userId', '') == null
+            && resource.data.get('recipientRole', '') == role()
+          )
         )
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']);
 

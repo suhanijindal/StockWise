@@ -106,9 +106,14 @@ export function subscribeToNotifications(
   let unsubscribeRole = () => {};
 
   if (role) {
+    // Only notifications addressed to nobody in particular are treated
+    // as role broadcasts. Without the userId filter every supplier would
+    // receive the notifications raised for all the other suppliers,
+    // since those carry recipientRole "supplier" as well.
     const roleQuery = query(
       collection(db, "notifications"),
       where("recipientRole", "==", role),
+      where("userId", "==", null),
     );
 
     unsubscribeRole = onSnapshot(
