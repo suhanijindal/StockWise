@@ -26,6 +26,7 @@ import {
   login as loginUser,
   logout as logoutUser,
   onAuthChange,
+  autoLinkSupplierByEmail,
 } from "./authService";
 
 import type { UserRole } from "../types/ui";
@@ -124,6 +125,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let active = true;
     let unsubscribeProfile: (() => void) | null = null;
 
+    // Supplier accounts that signed up before a matching supplier record
+    // existed are linked on their next sign-in. Attempted once per
+    // session so a genuinely unmatched account does not retry in a loop.
+    let linkAttempted = false;
+
     const stopProfileWatch = () => {
       unsubscribeProfile?.();
       unsubscribeProfile = null;
@@ -133,6 +139,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (!active) return;
 
       stopProfileWatch();
+      linkAttempted = false;
 
       setFirebaseUser(current);
       setLoading(true);
@@ -166,13 +173,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             typeof profile.name === "string" ? profile.name : "",
           );
 
-          setSupplierId(
+          const linkedSupplierId =
             typeof profile.supplierId === "string"
               ? profile.supplierId
-              : null,
-          );
+              : null;
 
+          setSupplierId(linkedSupplierId);
           setLoading(false);
+
+          // No supplier record attached yet: try to claim the one that
+          // carries this account's email address. A successful write
+          // comes straight back through this same listener.
+          if (
+            !linkedSupplierId &&
+            profile.role === "supplier" &&
+            current.email &&
+            !linkAttempted
+          ) {
+            linkAttempted = true;
+
+            void autoLinkSupplierByEmail(current.uid, current.email);
+          }
         },
         (cause) => {
           console.error("Could not read user profile:", cause);

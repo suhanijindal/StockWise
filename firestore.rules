@@ -48,6 +48,24 @@ service cloud.firestore {
       return isAdmin() || isManager();
     }
 
+    // The caller's verified email from their Auth token, lowercased.
+    function callerEmail() {
+      return request.auth != null && request.auth.token.email != null
+        ? request.auth.token.email.lower()
+        : '';
+    }
+
+    // A supplier record is claimable by the caller when nobody holds it
+    // yet and it carries the caller's own email address. This is what
+    // lets a new supplier account link itself instead of waiting for an
+    // admin to do it by hand.
+    function claimableSupplier(sid) {
+      return callerEmail() != ''
+        && exists(/databases/$(database)/documents/suppliers/$(sid))
+        && get(/databases/$(database)/documents/suppliers/$(sid)).data.get('userId', '') == ''
+        && get(/databases/$(database)/documents/suppliers/$(sid)).data.get('email', '').lower() == callerEmail();
+    }
+
     // The supplier record linked to the caller, or '' if unlinked.
     function ownSupplierId() {
       return isSupplier() ? profile().get('supplierId', '') : '';
@@ -76,6 +94,16 @@ service cloud.firestore {
         && request.resource.data.get('status', 'active') == resource.data.get('status', 'active')
         && request.resource.data.get('supplierId', '') == resource.data.get('supplierId', '');
 
+      // A supplier account may attach itself to the one unclaimed
+      // supplier record that carries its own email address. It can only
+      // ever add supplierId, and only when it is currently unset.
+      allow update: if signedIn()
+        && request.auth.uid == userId
+        && resource.data.role == 'supplier'
+        && resource.data.get('supplierId', '') == ''
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['supplierId'])
+        && claimableSupplier(request.resource.data.supplierId);
+
       // Admins provision, link and deactivate accounts.
       allow create, update: if isAdmin();
       allow delete: if false;
@@ -87,7 +115,20 @@ service cloud.firestore {
 
       // Only an admin registers, edits or removes supplier records.
       // Warehouse managers read the list to raise purchase orders.
-      allow create, update, delete: if isAdmin();
+      allow create, delete: if isAdmin();
+
+      // An admin may change anything. Otherwise the only permitted write
+      // is an account claiming an unclaimed record that carries its own
+      // email address, and it may set nothing but userId, to itself.
+      allow update: if isAdmin()
+        || (
+          signedIn()
+          && callerEmail() != ''
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['userId'])
+          && request.resource.data.userId == request.auth.uid
+          && resource.data.get('userId', '') == ''
+          && resource.data.get('email', '').lower() == callerEmail()
+        );
     }
 
     // ---------------- products ----------------
