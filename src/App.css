@@ -26,3 +26,127 @@
 .stat-icon-1,
 .stat-icon-2,
 .stat-icon-3{width:auto;height:auto;border-radius:0;background:none;box-shadow:none;color:#94a3b8}
+
+.auth-card.access-card {
+  width: min(100%, 440px);
+}
+
+.access-roles {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.access-roles legend {
+  margin-bottom: 8px;
+  padding: 0;
+  color: #334155;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.access-role {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 11px;
+  border: 1px solid #dfe6ef;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.access-role:hover {
+  border-color: #8ab0ff;
+}
+
+.access-role:has(input:checked) {
+  border-color: var(--blue);
+  background: #f1f6ff;
+}
+
+.access-role:has(input:focus-visible) {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+}
+
+.access-role-icon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  background: #eaf1ff;
+  color: var(--blue);
+}
+
+.access-role-copy strong,
+.access-role-copy small {
+  display: block;
+}
+
+.access-role-copy strong {
+  color: var(--navy);
+  font-size: 12px;
+}
+
+.access-role-copy small,
+.access-note {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.access-role-copy small {
+  margin-top: 2px;
+}
+
+.access-role input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--blue);
+}
+
+.access-note {
+  margin: 0 0 16px;
+}
+
+.access-roles .access-note {
+  margin: 2px 0 0;
+}
+
+.access-note a {
+  color: var(--blue);
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.access-mismatch {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid #dfe6ef;
+  border-radius: 8px;
+  background: #f8faff;
+}
+
+.access-mismatch h3,
+.access-mismatch p {
+  margin: 0;
+}
+
+.access-mismatch h3 {
+  color: var(--navy);
+  font-size: 14px;
+}
+
+.access-mismatch p {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}

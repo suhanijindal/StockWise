@@ -45,7 +45,6 @@ import {
   EyeOff,
   LockKeyhole,
   Mail,
-  Sparkles,
 } from "lucide-react";
 
 import { useAuth } from "./services/AuthContext";
@@ -146,6 +145,24 @@ const navByRole: Record<UserRole, NavEntry[]> = {
     { label: "Profile", path: "/settings" },
   ],
 };
+
+const signInRoles = [
+  {
+    role: "admin",
+    icon: ShieldCheck,
+    description: "Manage users, roles, inventory, and purchase orders.",
+  },
+  {
+    role: "warehouse_manager",
+    icon: Boxes,
+    description: "Adjust stock, create orders, and confirm deliveries.",
+  },
+  {
+    role: "supplier",
+    icon: Truck,
+    description: "View, accept, and ship purchase orders assigned to you.",
+  },
+] as const;
 
 function allowedPaths(role: UserRole): string[] {
   return navByRole[role].map((entry) => entry.path);
@@ -480,11 +497,11 @@ function App() {
         }
       />
 
-      <Route path="/login" element={<AuthPage mode="login" />} />
-      <Route path="/signup" element={<AuthPage mode="signup" />} />
+      <Route path="/login" element={<AuthPage key="login" mode="login" />} />
+      <Route path="/signup" element={<AuthPage key="signup" mode="signup" />} />
       <Route
         path="/forgot-password"
-        element={<AuthPage mode="forgot" />}
+        element={<AuthPage key="forgot" mode="forgot" />}
       />
 
       <Route
@@ -517,7 +534,7 @@ function AuthVisual() {
 
       <div className="visual-copy">
         <span className="eyebrow">
-          <Sparkles size={13} /> INVENTORY, IN SYNC
+          {/* <Sparkles size={13} /> INVENTORY, IN SYNC */}
         </span>
 
         <h1>
@@ -591,9 +608,9 @@ function AuthVisual() {
         <div className="art-box box-two" />
       </div>
 
-      <div className="visual-foot">
+      {/* <div className="visual-foot">
         <ShieldCheck size={15} /> Secure access for every team
-      </div>
+      </div> */}
     </>
   );
 }
@@ -605,15 +622,15 @@ function AuthPage({
 }) {
   const {
     login,
+    logout,
     register,
     resetPassword,
     error,
     clearError,
     firebaseUser,
     role,
+    loading,
   } = useAuth();
-
-  const nav = useNavigate();
 
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -623,12 +640,34 @@ function AuthPage({
   const [busy, setBusy] = useState(false);
   const [success, setSuccess] = useState("");
   const [remember, setRemember] = useState(true);
+  const [selectedRole, setSelectedRole] = useState<UserRole | null>(null);
+  const [signOutError, setSignOutError] = useState("");
 
-  useEffect(() => {
-    if (firebaseUser && role) {
-      nav("/overview", { replace: true });
+  const sessionRole = firebaseUser && !loading ? role : null;
+  const roleMismatch =
+    mode === "login" && selectedRole && sessionRole && selectedRole !== sessionRole;
+  const pending = busy || (mode === "login" && Boolean(firebaseUser && loading));
+
+  if (!busy && firebaseUser && !loading) {
+    if (!sessionRole) return <NoRole />;
+    if (!roleMismatch) return <Navigate to="/overview" replace />;
+  }
+
+  const useDifferentAccount = async () => {
+    setSignOutError("");
+    setBusy(true);
+
+    try {
+      await logout();
+      setEmail("");
+      setPassword("");
+      setShow(false);
+    } catch {
+      setSignOutError("Could not sign out. Please try again.");
+    } finally {
+      setBusy(false);
     }
-  }, [firebaseUser, role, nav]);
+  };
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -636,6 +675,7 @@ function AuthPage({
     clearError();
     setSuccess("");
 
+    if (mode === "login" && !selectedRole) return;
     if (mode === "signup" && password !== confirm) return;
 
     setBusy(true);
@@ -643,13 +683,8 @@ function AuthPage({
     try {
       if (mode === "login") {
         await login(email, password, remember);
-        nav("/");
       } else if (mode === "signup") {
         await register(name, email, password);
-
-        setSuccess(
-          "Your account was created. An administrator must approve your profile and assign your access before you can sign in.",
-        );
       } else {
         await resetPassword(email);
 
@@ -671,33 +706,30 @@ function AuthPage({
       </section>
 
       <section className="auth-form-side">
-        <div className="auth-top">
-          <span>
-            {mode === "signup"
-              ? "Already have an account?"
-              : mode === "forgot"
-                ? "Remember your password?"
-                : "New to Stockwise?"}
-          </span>
-
-          <Link
-            to={
-              mode === "signup"
-                ? "/login"
+        {!roleMismatch && (
+          <div className="auth-top">
+            <span>
+              {mode === "signup"
+                ? "Already have an account?"
                 : mode === "forgot"
-                  ? "/login"
-                  : "/signup"
-            }
-          >
-            {mode === "signup"
-              ? "Sign in"
-              : mode === "forgot"
-                ? "Back to sign in"
-                : "Create account"}
-          </Link>
-        </div>
+                  ? "Remember your password?"
+                  : "New supplier?"}
+            </span>
 
-        <div className="auth-card">
+            <Link
+              onClick={clearError}
+              to={mode === "login" ? "/signup" : "/login"}
+            >
+              {mode === "signup"
+                ? "Sign in"
+                : mode === "forgot"
+                  ? "Back to sign in"
+                  : "Create supplier account"}
+            </Link>
+          </div>
+        )}
+
+        <div className={mode === "login" ? "auth-card access-card" : "auth-card"}>
           <div className="auth-mobile-brand">
             <div className="brand-mark">
               <Boxes size={22} />
@@ -716,22 +748,31 @@ function AuthPage({
 
             <h2>
               {mode === "login"
-                ? "Sign in to your workspace"
+                ? "Sign in to Stockwise"
                 : mode === "signup"
-                  ? "Create your account"
+                  ? "Create a supplier account"
                   : "Reset your password"}
             </h2>
 
             <p>
               {mode === "login"
-                ? "Your inventory command center is ready."
-                : "We’ll help you get back to your inventory workspace."}
+                ? "Choose the role assigned to your account."
+                : mode === "signup"
+                  ? "This account lets you view and fulfill your assigned purchase orders."
+                  : "Enter your email address to receive a password reset link."}
             </p>
           </div>
 
-          {error && (
-            <div className="form-alert error">
-              {error}
+          {mode === "signup" && (
+            <p className="access-note">
+              Already have administrator or warehouse manager access?{" "}
+              <Link to="/login" onClick={clearError}>Choose your role and sign in</Link>.
+            </p>
+          )}
+
+          {(error || signOutError) && (
+            <div className="form-alert error" role="alert">
+              {signOutError || error}
             </div>
           )}
 
@@ -742,166 +783,222 @@ function AuthPage({
             </div>
           )}
 
-          <form onSubmit={submit} className="auth-form">
-            {mode === "signup" && (
-              <label>
-                Full name
-
-                <div className="input-wrap">
-                  <Users size={17} />
-
-                  <input
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    placeholder="Your full name"
-                    required
-                    minLength={2}
-                  />
-                </div>
-              </label>
-            )}
-
-            <label>
-              Email address
-
-              <div className="input-wrap">
-                <Mail size={17} />
-
-                <input
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="you@company.com"
-                  required
-                  autoComplete="email"
-                />
-              </div>
-            </label>
-
-            {mode !== "forgot" && (
-              <label>
-                Password
-
-                <div className="input-wrap">
-                  <LockKeyhole size={17} />
-
-                  <input
-                    type={show ? "text" : "password"}
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder="At least 8 characters"
-                    required
-                    minLength={8}
-                    autoComplete={
-                      mode === "login"
-                        ? "current-password"
-                        : "new-password"
-                    }
-                  />
-
-                  <button
-                    type="button"
-                    className="icon-btn"
-                    onClick={() => setShow(!show)}
-                    aria-label={show ? "Hide password" : "Show password"}
-                  >
-                    {show ? <EyeOff size={17} /> : <Eye size={17} />}
-                  </button>
-                </div>
-              </label>
-            )}
-
-            {mode === "signup" && (
-              <label>
-                Confirm password
-
-                <div className="input-wrap">
-                  <LockKeyhole size={17} />
-
-                  <input
-                    type={show ? "text" : "password"}
-                    value={confirm}
-                    onChange={(e) => setConfirm(e.target.value)}
-                    placeholder="Re-enter your password"
-                    required
-                    minLength={8}
-                  />
-                </div>
-
-                {confirm && password !== confirm && (
-                  <small className="field-error">
-                    Passwords don’t match
-                  </small>
-                )}
-              </label>
-            )}
-
-            {mode === "login" && (
-              <div className="form-options">
-                <label className="check-label">
-                  <input
-                    type="checkbox"
-                    checked={remember}
-                    onChange={(e) => setRemember(e.target.checked)}
-                  />
-                  {" "}Remember me
-                </label>
-
-                <Link to="/forgot-password">
-                  Forgot password?
-                </Link>
-              </div>
-            )}
-
-            <button
-              className="button primary full"
-              disabled={
-                busy ||
-                (mode === "signup" && password !== confirm)
-              }
-            >
-              {busy ? (
-                <>
-                  <span className="loader light-loader" />
-
-                  {mode === "login"
-                    ? "Signing in…"
-                    : mode === "signup"
-                      ? "Creating account…"
-                      : "Sending link…"}
-                </>
-              ) : (
-                <>
-                  {mode === "login"
-                    ? "Sign in"
-                    : mode === "signup"
-                      ? "Create account"
-                      : "Send reset link"}
-
-                  <ArrowRight size={17} />
-                </>
+          {roleMismatch ? (
+            <section className="access-mismatch" aria-labelledby="access-mismatch-title">
+              <h3 id="access-mismatch-title">Your account has a different role</h3>
+              <p role="status">
+                You selected {ROLE_LABELS[selectedRole]}.{" "}
+                Your account is assigned {ROLE_LABELS[sessionRole]}.
+              </p>
+              <Link className="button primary full" to="/overview" replace>
+                Continue as {ROLE_LABELS[sessionRole]}
+                <ArrowRight size={17} />
+              </Link>
+              <button
+                type="button"
+                className="button secondary full"
+                onClick={useDifferentAccount}
+                disabled={busy}
+              >
+                {busy ? "Signing out…" : "Use a different account"}
+              </button>
+            </section>
+          ) : (
+            <form onSubmit={submit} className="auth-form">
+              {mode === "login" && (
+                <fieldset className="access-roles" disabled={pending}>
+                  <legend>Sign in as</legend>
+                  {signInRoles.map(({ role: option, icon: Icon, description }) => (
+                    <label className="access-role" key={option}>
+                      <span className="access-role-icon" aria-hidden="true">
+                        <Icon size={18} />
+                      </span>
+                      <span className="access-role-copy">
+                        <strong>{ROLE_LABELS[option]}</strong>
+                        <small id={`access-description-${option}`}>{description}</small>
+                      </span>
+                      <input
+                        type="radio"
+                        name="sign-in-role"
+                        value={option}
+                        checked={selectedRole === option}
+                        aria-label={ROLE_LABELS[option]}
+                        aria-describedby={`access-description-${option}`}
+                        onChange={() => {
+                          clearError();
+                          setSelectedRole(option);
+                        }}
+                        required
+                      />
+                    </label>
+                  ))}
+                  <p className="access-note">
+                    Administrator and warehouse manager access is assigned by your workspace admin.
+                  </p>
+                </fieldset>
               )}
-            </button>
-          </form>
+
+              {mode === "signup" && (
+                <label>
+                  Full name
+
+                  <div className="input-wrap">
+                    <Users size={17} />
+
+                    <input
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                      placeholder="Your full name"
+                      required
+                      minLength={2}
+                    />
+                  </div>
+                </label>
+              )}
+
+              <label>
+                Email address
+
+                <div className="input-wrap">
+                  <Mail size={17} />
+
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="you@company.com"
+                    required
+                    autoComplete="email"
+                  />
+                </div>
+              </label>
+
+              {mode !== "forgot" && (
+                <label>
+                  Password
+
+                  <div className="input-wrap">
+                    <LockKeyhole size={17} />
+
+                    <input
+                      type={show ? "text" : "password"}
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      placeholder={mode === "login" ? "Enter your password" : "At least 8 characters"}
+                      required
+                      minLength={mode === "signup" ? 8 : undefined}
+                      autoComplete={
+                        mode === "login"
+                          ? "current-password"
+                          : "new-password"
+                      }
+                    />
+
+                    <button
+                      type="button"
+                      className="icon-btn"
+                      onClick={() => setShow(!show)}
+                      aria-label={show ? "Hide password" : "Show password"}
+                    >
+                      {show ? <EyeOff size={17} /> : <Eye size={17} />}
+                    </button>
+                  </div>
+                </label>
+              )}
+
+              {mode === "signup" && (
+                <label>
+                  Confirm password
+
+                  <div className="input-wrap">
+                    <LockKeyhole size={17} />
+
+                    <input
+                      type={show ? "text" : "password"}
+                      value={confirm}
+                      onChange={(e) => setConfirm(e.target.value)}
+                      placeholder="Re-enter your password"
+                      required
+                      minLength={8}
+                    />
+                  </div>
+
+                  {confirm && password !== confirm && (
+                    <small className="field-error">
+                      Passwords don’t match
+                    </small>
+                  )}
+                </label>
+              )}
+
+              {mode === "login" && (
+                <div className="form-options">
+                  <label className="check-label">
+                    <input
+                      type="checkbox"
+                      checked={remember}
+                      onChange={(e) => setRemember(e.target.checked)}
+                    />
+                    {" "}Remember me
+                  </label>
+
+                  <Link to="/forgot-password" onClick={clearError}>
+                    Forgot password?
+                  </Link>
+                </div>
+              )}
+
+              <button
+                className="button primary full"
+                disabled={
+                  pending ||
+                  (mode === "login" && !selectedRole) ||
+                  (mode === "signup" && password !== confirm)
+                }
+              >
+                {pending ? (
+                  <>
+                    <span className="loader light-loader" />
+
+                    {mode === "login"
+                      ? "Signing in…"
+                      : mode === "signup"
+                        ? "Creating account…"
+                        : "Sending link…"}
+                  </>
+                ) : (
+                  <>
+                    {mode === "login"
+                      ? (selectedRole ? `Sign in as ${ROLE_LABELS[selectedRole]}` : "Sign in")
+                      : mode === "signup"
+                        ? "Create supplier account"
+                        : "Send reset link"}
+
+                    <ArrowRight size={17} />
+                  </>
+                )}
+              </button>
+            </form>
+          )}
 
           <div className="auth-divider">
-            <span />
+            {/* <span />
             <small>SECURE, ROLE-BASED ACCESS</small>
-            <span />
+            <span /> */}
           </div>
 
           <div className="auth-secure">
             <ShieldCheck size={17} />
 
-            <span>
+            {/* <span>
               Your account is protected with encrypted authentication.
-            </span>
+            </span> */}
           </div>
         </div>
 
-        <div className="auth-bottom">
+        {/* <div className="auth-bottom">
           © 2024 Stockwise, Inc. <span>·</span> Built for better inventory flow
-        </div>
+        </div> */}
       </section>
     </main>
   );
@@ -1061,26 +1158,6 @@ function Dashboard() {
         </nav>
 
         <div className="sidebar-bottom">
-          <div className="help-card">
-            <div className="help-icon">
-              <CircleHelp size={17} />
-            </div>
-
-            <b>Need a hand?</b>
-
-            <p>Visit our help center for quick answers.</p>
-
-            <button
-              onClick={() =>
-                setNotice(
-                  "Help center is ready to connect to your team’s support resource.",
-                )
-              }
-            >
-              Get support <ArrowRight size={14} />
-            </button>
-          </div>
-
           <button
             className="nav-item logout-nav"
             onClick={async () => {
@@ -1185,11 +1262,6 @@ function Dashboard() {
         </header>
 
         <div className="demo-banner">
-          <span>
-            <Sparkles size={15} />
-            Live workspace · connected to Cloud Firestore
-          </span>
-
           <div>
             {isStaff
               ? `${products.length} products · ${suppliers.length} suppliers · ${orders.length} orders`
@@ -1455,7 +1527,7 @@ function Overview({
             : role === "supplier"
               ? "SUPPLIER PORTAL"
               : "WAREHOUSE OPERATIONS"
-        } · OVERVIEW`}
+        }`}
         title={title}
         subtitle={
           role === "supplier"
